@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DOCX Knowledge Library</title>
+  <link rel="stylesheet" href="styles.css">
+  <meta name="robots" content="noindex">
+</head>
+<body>
+  <header>
+    <h1>📚 DOCX Knowledge Library</h1>
+    <p>Zero-backend. No Actions. This page lists <code>library/</code> files using the GitHub API.</p>
+  </header>
+
+  <section class="card">
+    <h2>Quick setup (one-time)</h2>
+    <ol>
+      <li>Create a new GitHub repo and upload everything from this ZIP.</li>
+      <li>Open this file (<code>index.html</code>) in GitHub and set your <strong>OWNER</strong>, <strong>REPO</strong>, and <strong>BRANCH</strong> in the <em>Config</em> block below, then save.</li>
+      <li>Enable GitHub Pages: <em>Settings → Pages → Build from branch</em> → <code>main</code> / root.</li>
+      <li>Upload your <code>.docx</code> files into the <code>library/</code> folder via GitHub’s “Upload files”.</li>
+    </ol>
+  </section>
+
+  <section class="card">
+    <h2>Documents</h2>
+    <div id="status">Loading…</div>
+    <table id="docsTable" class="hidden">
+      <thead>
+        <tr>
+          <th>File</th>
+          <th>Size</th>
+          <th>Last Modified</th>
+          <th>Download</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <footer>
+    <p>Machine-readable: your agent can call the GitHub API:
+      <code>GET https://api.github.com/repos/&lt;OWNER&gt;/&lt;REPO&gt;/contents/library?ref=&lt;BRANCH&gt;</code>
+    </p>
+  </footer>
+
+  <script>
+    // ======== Config (edit these 3 lines in GitHub) ========
+    const OWNER  = "your-username";         // ← change me
+    const REPO   = "your-repo";             // ← change me
+    const BRANCH = "main";                  // ← change me
+    // =======================================================
+
+    const apiBase = `https://api.github.com/repos/${OWNER}/${REPO}`;
+    const cacheKey = `${OWNER}/${REPO}@${BRANCH}/library-cache-v1`;
+
+    function formatKB(bytes){ return (bytes/1024).toFixed(1) + " KB"; }
+
+    function pagesFileUrl(name){
+      // Prefer serving via GitHub Pages (same origin) so downloads are simple.
+      // Assumes this page is hosted at https://OWNER.github.io/REPO/
+      const base = `${location.origin}${location.pathname.replace(/\/index\.html?$/,"")}`;
+      return `${base}/library/${encodeURIComponent(name)}`;
+    }
+
+    async function fetchJSON(url){
+      const res = await fetch(url, { cache: "no-store" });
+      if(!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+      return res.json();
+    }
+
+    async function lastCommitISO(path){
+      try{
+        const url = `${apiBase}/commits?path=${encodeURIComponent(path)}&per_page=1&sha=${encodeURIComponent(BRANCH)}`;
+        const arr = await fetchJSON(url);
+        if(Array.isArray(arr) && arr.length){
+          return arr[0].commit && arr[0].commit.committer && arr[0].commit.committer.date || null;
+        }
+      }catch(e){ /* ignore */ }
+      return null;
+    }
+
+    async function loadDocs(){
+      const status = document.getElementById("status");
+      const table  = document.getElementById("docsTable");
+      const tbody  = table.querySelector("tbody");
+      status.textContent = "Loading…";
+
+      // Try cache first (helps during GitHub API hiccups or rate limits)
+      try{
+        const cached = JSON.parse(localStorage.getItem(cacheKey) || "null");
+        if(cached && Array.isArray(cached.items)){
+          render(cached.items);
+        }
+      }catch(e){ /* ignore */ }
+
+      try{
+        const contents = await fetchJSON(`${apiBase}/contents/library?ref=${encodeURIComponent(BRANCH)}`);
+        // Filter for .docx files
+        const docs = contents
+          .filter(item => item.type === "file" && /\.docx$/i.test(item.name))
+          .map(item => ({ name: item.name, size: item.size, path: item.path }));
+
+        // Fetch last modified dates (one request per file)
+        for(let d of docs){
+          d.last_modified = await lastCommitISO(d.path) || new Date().toISOString();
+          d.url = pagesFileUrl(d.name);
+        }
+
+        // Sort by name
+        docs.sort((a,b) => a.name.localeCompare(b.name));
+
+        render(docs);
+        localStorage.setItem(cacheKey, JSON.stringify({ items: docs, saved_at: Date.now() }));
+      }catch(err){
+        status.textContent = "Could not load from GitHub API. Showing any cached results, if available.";
+        console.error(err);
+      }
+
+      function render(items){
+        tbody.innerHTML = "";
+        for(const d of items){
+          const tr = document.createElement("tr");
+          const date = new Date(d.last_modified).toLocaleString();
+          tr.innerHTML = `
+            <td>${d.name}</td>
+            <td>${formatKB(d.size)}</td>
+            <td>${date}</td>
+            <td><a href="${d.url}" download>Download</a></td>
+          `;
+          tbody.appendChild(tr);
+        }
+        status.classList.add("hidden");
+        table.classList.remove("hidden");
+      }
+    }
+    loadDocs();
+  </script>
+</body>
+</html>
